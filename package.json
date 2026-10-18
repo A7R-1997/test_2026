@@ -1,15 +1,14 @@
+
 {
   "name": "jenkins",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "description": "Node.js application with PostgreSQL integration tests",
+  "main": "src/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node src/index.js",
+    "test": "node --test"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "directories": {
-    "test": "test"
-  }
+  "license": "ISC"
 }
