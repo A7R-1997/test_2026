@@ -18,7 +18,7 @@ pipeline {
                     
                     sleep 5
 
-                    // تشغيل الـ npm install بشكل منفصل لضمان قراءة الملفات في مسار الـ Workspace المربوط
+                    // تشغيل الـ npm install والتأكد من قراءة الملفات في مسار الـ Workspace المربوط
                     sh 'docker run --rm --network test-net -e DATABASE_URL=postgresql://postgres:secret@test-postgres:5432/test_db -v ${WORKSPACE}:/app -w /app node:18-alpine npm install || true'
 
                     sh 'docker stop test-postgres && docker rm test-postgres || true'
