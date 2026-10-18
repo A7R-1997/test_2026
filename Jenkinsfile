@@ -20,22 +20,17 @@ pipeline {
 
         TEST_NETWORK = "test-net-${BUILD_NUMBER}"
         TEST_CONTAINER = "test-postgres-${BUILD_NUMBER}"
-
         TEST_IMAGE = "node-test:${BUILD_NUMBER}"
         APP_IMAGE = "node-app:${BUILD_NUMBER}"
     }
 
     stages {
-
         stage('1. Checkout & Inspect') {
             steps {
-                echo 'Checking project files...'
-
                 sh '''
                     set -eu
 
                     echo "Workspace: $WORKSPACE"
-                    pwd
                     ls -la
 
                     test -f package.json || {
@@ -43,12 +38,15 @@ pipeline {
                         exit 1
                     }
 
+                    test -f package-lock.json || {
+                        echo "ERROR: package-lock.json not found"
+                        exit 1
+                    }
+
                     test -f Dockerfile || {
                         echo "ERROR: Dockerfile not found"
                         exit 1
                     }
-
-                    echo "Project files verified."
                 '''
             }
         }
@@ -60,10 +58,19 @@ pipeline {
                 sh '''
                     set -eu
 
+                    docker build \
+                        -f - \
+                        -t "node-audit:${BUILD_NUMBER}" \
+                        . <<'DOCKERFILE'
+FROM node:18-alpine
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+DOCKERFILE
+
                     docker run --rm \
-                        -v "$WORKSPACE:/app" \
-                        -w /app \
-                        "$NODE_IMAGE" \
+                        "node-audit:${BUILD_NUMBER}" \
                         npm audit --audit-level=high
                 '''
             }
@@ -71,7 +78,7 @@ pipeline {
 
         stage('3. Build Test Image') {
             steps {
-                echo 'Building isolated test image...'
+                echo 'Building test image with development dependencies...'
 
                 sh '''
                     set -eu
@@ -84,9 +91,9 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-COPY package*.json ./
+COPY package.json package-lock.json ./
 
-RUN npm install
+RUN npm ci
 
 COPY . .
 
@@ -94,7 +101,10 @@ DOCKERFILE
 
                     docker run --rm \
                         "$TEST_IMAGE" \
-                        node -e "console.log('Node.js test image is ready')"
+                        node -e "
+                            require('supertest');
+                            console.log('Supertest is installed.');
+                        "
                 '''
             }
         }
@@ -132,7 +142,7 @@ DOCKERFILE
                             ).trim()
 
                             if (status == 'unhealthy') {
-                                error('PostgreSQL is unhealthy')
+                                error('PostgreSQL container is unhealthy')
                             }
 
                             return status == 'healthy'
@@ -144,28 +154,76 @@ DOCKERFILE
             }
         }
 
-        stage('5. Database Integration Tests') {
+        stage('5. Run Database Migrations') {
+            steps {
+                script {
+                    def migrationFiles = sh(
+                        script: '''
+                            find migrations -maxdepth 1 -type f \
+                                \\( -name '*.sql' -o -name '*.js' \\) \
+                                2>/dev/null | sort
+                        ''',
+                        returnStdout: true
+                    ).trim()
+
+                    if (migrationFiles) {
+                        echo 'Migration files detected.'
+
+                        // SQL migrations are applied with psql.
+                        def sqlMigrations = sh(
+                            script: '''
+                                find migrations -maxdepth 1 \
+                                    -type f -name '*.sql' 2>/dev/null \
+                                    | sort
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+                        if (sqlMigrations) {
+                            sh '''
+                                set -eu
+
+                                docker run --rm \
+                                    --network "$TEST_NETWORK" \
+                                    -e PGPASSWORD="$DB_PASSWORD" \
+                                    -v "$WORKSPACE/migrations:/migrations:ro" \
+                                    "$POSTGRES_IMAGE" \
+                                    sh -c '
+                                        for f in $(find /migrations -maxdepth 1 -type f -name "*.sql" | sort); do
+                                            echo "Applying $f"
+                                            psql -v ON_ERROR_STOP=1 \
+                                                -h "$DB_HOST" \
+                                                -U "$DB_USER" \
+                                                -d "$DB_NAME" \
+                                                -f "$f"
+                                        done
+                                    '
+                            '''
+                        }
+                    } else {
+                        echo 'No SQL or JavaScript migration files detected; skipping migrations.'
+                    }
+                }
+            }
+        }
+
+        stage('6. Integration Tests') {
             steps {
                 script {
                     def hasTestScript = sh(
                         script: '''
-                            docker run --rm \
-                                "$TEST_IMAGE" \
-                                node -e "
-                                    const p = require('./package.json');
-                                    process.exit(
-                                        p.scripts && p.scripts.test ? 0 : 1
-                                    );
-                                "
+                            docker run --rm "$TEST_IMAGE" node -e "
+                                const p = require('./package.json');
+                                process.exit(
+                                    p.scripts && p.scripts.test ? 0 : 1
+                                );
+                            "
                         ''',
                         returnStatus: true
                     ) == 0
 
                     if (!hasTestScript) {
-                        error(
-                            'No test script found in package.json. ' +
-                            'Configure a real test command before continuing.'
-                        )
+                        error('No test script found in package.json')
                     }
 
                     withEnv([
@@ -185,9 +243,9 @@ DOCKERFILE
             }
         }
 
-        stage('6. Build Production Docker Image') {
+        stage('7. Build Production Image') {
             steps {
-                echo 'Building production image using Dockerfile...'
+                echo 'Building production Docker image...'
 
                 sh '''
                     set -eu
@@ -219,7 +277,7 @@ DOCKERFILE
         }
 
         failure {
-            echo 'Pipeline failed. Check the stage logs.'
+            echo 'Pipeline failed. Check the logs for the first failing stage.'
         }
     }
 }
