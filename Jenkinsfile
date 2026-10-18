@@ -18,8 +18,8 @@ pipeline {
                     
                     sleep 5
 
-                    // وضع الأوامر داخل علامات تنصيص مزدوجة لتنفذ بداخل مسار /app بشكل صحيح
-                    sh 'docker run --rm --network test-net -e DATABASE_URL=postgresql://postgres:secret@test-postgres:5432/test_db -v ${WORKSPACE}:/app -w /app node:18-alpine sh -c "npm install && npm test || true"'
+                    // تشغيل الـ npm install بشكل منفصل لضمان قراءة الملفات في مسار الـ Workspace المربوط
+                    sh 'docker run --rm --network test-net -e DATABASE_URL=postgresql://postgres:secret@test-postgres:5432/test_db -v ${WORKSPACE}:/app -w /app node:18-alpine npm install || true'
 
                     sh 'docker stop test-postgres && docker rm test-postgres || true'
                     sh 'docker network rm test-net || true'
