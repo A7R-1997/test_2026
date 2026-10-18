@@ -33,20 +33,10 @@ pipeline {
                     echo "Workspace: $WORKSPACE"
                     ls -la
 
-                    test -f package.json || {
-                        echo "ERROR: package.json not found"
-                        exit 1
-                    }
-
-                    test -f package-lock.json || {
-                        echo "ERROR: package-lock.json not found"
-                        exit 1
-                    }
-
-                    test -f Dockerfile || {
-                        echo "ERROR: Dockerfile not found"
-                        exit 1
-                    }
+                    test -f package.json
+                    test -f package-lock.json
+                    test -f Dockerfile
+                    test -f Jenkinsfile
                 '''
             }
         }
@@ -78,7 +68,7 @@ DOCKERFILE
 
         stage('3. Build Test Image') {
             steps {
-                echo 'Building test image with development dependencies...'
+                echo 'Building test image...'
 
                 sh '''
                     set -eu
@@ -88,15 +78,10 @@ DOCKERFILE
                         -t "$TEST_IMAGE" \
                         . <<'DOCKERFILE'
 FROM node:18-alpine
-
 WORKDIR /app
-
 COPY package.json package-lock.json ./
-
 RUN npm ci
-
 COPY . .
-
 DOCKERFILE
 
                     docker run --rm \
@@ -119,10 +104,11 @@ DOCKERFILE
                     docker run -d \
                         --name "$TEST_CONTAINER" \
                         --network "$TEST_NETWORK" \
+                        --network-alias "$DB_HOST" \
                         -e POSTGRES_USER="$DB_USER" \
                         -e POSTGRES_PASSWORD="$DB_PASSWORD" \
                         -e POSTGRES_DB="$DB_NAME" \
-                        --health-cmd="pg_isready -U postgres -d test_db" \
+                        --health-cmd="pg_isready -U $DB_USER -d $DB_NAME" \
                         --health-interval=2s \
                         --health-timeout=3s \
                         --health-retries=30 \
@@ -157,51 +143,49 @@ DOCKERFILE
         stage('5. Run Database Migrations') {
             steps {
                 script {
-                    def migrationFiles = sh(
+                    def sqlMigrations = sh(
                         script: '''
-                            find migrations -maxdepth 1 -type f \
-                                \\( -name '*.sql' -o -name '*.js' \\) \
-                                2>/dev/null | sort
+                            find migrations -maxdepth 1 \
+                                -type f -name '*.sql' 2>/dev/null \
+                                | sort || true
                         ''',
                         returnStdout: true
                     ).trim()
 
-                    if (migrationFiles) {
-                        echo 'Migration files detected.'
+                    if (sqlMigrations) {
+                        echo 'Applying SQL migrations...'
 
-                        // SQL migrations are applied with psql.
-                        def sqlMigrations = sh(
-                            script: '''
-                                find migrations -maxdepth 1 \
-                                    -type f -name '*.sql' 2>/dev/null \
-                                    | sort
-                            ''',
-                            returnStdout: true
-                        ).trim()
+                        sh '''
+                            set -eu
 
-                        if (sqlMigrations) {
-                            sh '''
-                                set -eu
+                            docker run --rm \
+                                --network "$TEST_NETWORK" \
+                                -e PGPASSWORD="$DB_PASSWORD" \
+                                -e DB_HOST="$DB_HOST" \
+                                -e DB_USER="$DB_USER" \
+                                -e DB_NAME="$DB_NAME" \
+                                -v "$WORKSPACE/migrations:/migrations:ro" \
+                                "$POSTGRES_IMAGE" \
+                                sh -c '
+                                    set -eu
 
-                                docker run --rm \
-                                    --network "$TEST_NETWORK" \
-                                    -e PGPASSWORD="$DB_PASSWORD" \
-                                    -v "$WORKSPACE/migrations:/migrations:ro" \
-                                    "$POSTGRES_IMAGE" \
-                                    sh -c '
-                                        for f in $(find /migrations -maxdepth 1 -type f -name "*.sql" | sort); do
-                                            echo "Applying $f"
-                                            psql -v ON_ERROR_STOP=1 \
-                                                -h "$DB_HOST" \
-                                                -U "$DB_USER" \
-                                                -d "$DB_NAME" \
-                                                -f "$f"
-                                        done
-                                    '
-                            '''
-                        }
+                                    for f in $(find /migrations \
+                                        -maxdepth 1 -type f \
+                                        -name "*.sql" | sort); do
+
+                                        echo "Applying $f"
+
+                                        psql \
+                                            -v ON_ERROR_STOP=1 \
+                                            -h "$DB_HOST" \
+                                            -U "$DB_USER" \
+                                            -d "$DB_NAME" \
+                                            -f "$f"
+                                    done
+                                '
+                        '''
                     } else {
-                        echo 'No SQL or JavaScript migration files detected; skipping migrations.'
+                        echo 'No SQL migration files found; skipping migrations.'
                     }
                 }
             }
