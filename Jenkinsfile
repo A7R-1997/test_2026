@@ -2,18 +2,10 @@ pipeline {
     agent any
 
     stages {
-        stage('0. Sync Workspace Files') {
-            steps {
-                echo 'Copying project files to Jenkins workspace...'
-                // نسخ الملفات مباشرة من المجلد المربوط إلى مجلد الـ Workspace الحالي
-                sh 'cp -r /app/. . || true'
-            }
-        }
-
         stage('1. Code Security Audit') {
             steps {
-                echo 'Running NPM Security Audit...'
-                sh 'npm audit --audit-level=high || true'
+                echo 'Running NPM Security Audit inside Node container...'
+                sh 'docker run --rm -v ${WORKSPACE}:/app -w /app node:18-alpine npm audit --audit-level=high || true'
             }
         }
 
@@ -26,9 +18,8 @@ pipeline {
                     
                     sleep 5
 
-                    // تشغيل الـ npm install والـ tests بعد أن أصبحت الملفات موجودة في الـ Workspace
-                    sh 'npm install'
-                    sh 'npm test || true'
+                    // تشغيل الـ npm install والـ tests داخل حاوية Node مؤقتة متصلة بالشبكة مع قاعدة البيانات
+                    sh 'docker run --rm --network test-net -e DATABASE_URL=postgresql://postgres:secret@test-postgres:5432/test_db -v ${WORKSPACE}:/usr/src/app -w /usr/src/app node:18-alpine sh -c "npm install && npm test || true"'
 
                     sh 'docker stop test-postgres && docker rm test-postgres || true'
                     sh 'docker network rm test-net || true'
@@ -38,8 +29,7 @@ pipeline {
 
         stage('3. Build Production Docker Image') {
             steps {
-                echo 'Building production image...'
-                // بناء الصورة من مسار الـ Workspace الحالي بعد اكتمال النسخ ووجود الـ Dockerfile
+                echo 'Building production Docker image...'
                 sh 'docker build -t node-app:${BUILD_NUMBER} .'
             }
         }
