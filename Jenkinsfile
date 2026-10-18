@@ -18,8 +18,8 @@ pipeline {
                     
                     sleep 5
 
-                    // تشغيل الـ npm install والـ tests داخل حاوية Node مؤقتة متصلة بالشبكة مع قاعدة البيانات
-                    sh 'docker run --rm --network test-net -e DATABASE_URL=postgresql://postgres:secret@test-postgres:5432/test_db -v ${WORKSPACE}:/usr/src/app -w /usr/src/app node:18-alpine sh -c "npm install && npm test || true"'
+                    // تشغيل الاختبارات والتأكد من وجود مسار الملفات بشكل صحيح
+                    sh 'docker run --rm --network test-net -e DATABASE_URL=postgresql://postgres:secret@test-postgres:5432/test_db -v ${WORKSPACE}:/app -w /app node:18-alpine sh -c "npm install && npm test || true"'
 
                     sh 'docker stop test-postgres && docker rm test-postgres || true'
                     sh 'docker network rm test-net || true'
