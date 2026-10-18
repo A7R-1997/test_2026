@@ -1,0 +1,17 @@
+
+New-Item -ItemType Directory -Force src, migrations, test, scripts
+New-Item -ItemType File -Force src\db.js, src\app.js, migrations\001_init.sql, test\app.test.js
+
+New-Item -ItemType File -Force Dockerfile, docker-compose.sys.yml, Jenkinsfile, nginx.conf
+
+
+
+docker-compose -f docker-compose.sys.yml up -d
+
+docker exec jenkins_master cat /var/jenkins_home/secrets/initialAdminPassword
+
+docker exec -u root -it jenkins_master bash
+
+apt-get update && apt-get install -y curl
+curl -fsSL https://get.docker.com -o get-docker.sh
+sh get-docker.sh
